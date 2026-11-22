@@ -106,7 +106,7 @@ const CAST_DATA = [
   {id:"hoshino", name:"浅井 月乃", age:35, sex:"F", style:"鞭拳空手", role:"しなる鞭拳の使い手／演武・解説枠", debut:4},
   {id:"iguchi", name:"井下 真吾", age:70, sex:"M", style:"フルコンタクト空手", role:"達人枠／70歳で70人組手に挑む道場主・結節点", debut:6},
   {id:"nonaka", name:"中野 智久", age:56, sex:"M", style:"躰道・整体", role:"身体操作と整体を往く解説者／身体操作枠", debut:5},
-  {id:"shiroma", name:"山城 麗乃", age:62, sex:"M", style:"沖縄拳法空手", role:"師匠枠（厳格型）／滅多に表に出ない直伝の老師・レアキャラ", debut:6},
+  {id:"shiroma", name:"海城 麗乃", age:62, sex:"M", style:"沖縄拳法空手", role:"師匠枠（厳格型）／滅多に表に出ない直伝の老師・レアキャラ", debut:6},
   {id:"tachibana", name:"纐纈 卓実", age:44, sex:"M", style:"フルコンタクト空手", role:"世界大会三連覇・百人組手達成の王者／対戦・解説枠", debut:5},
   {id:"genta", name:"甘田 将真", age:35, sex:"M", style:"合気道", role:"甘田剛志の孫／達人インタビュアー・対談枠", debut:5},
   {id:"kodo", name:"虎爪 光一", age:41, sex:"M", style:"中国武術", role:"中国武術の実演家／検証・交流枠", debut:4},
