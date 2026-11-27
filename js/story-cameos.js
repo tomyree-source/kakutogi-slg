@@ -283,6 +283,9 @@ function botyPlayCandidates(yearIdx){
   if (inYear(S.flags.lifeNtrWeek)) out.push({kind:"laugh", label:"彼女を寝取られた師範", blurb:"放置した時間の分だけ、請求は重かった。因縁試合にも届かなかった、静かな大敗北"});
   if (inYear(S.flags.lifeAffairWeek) && !inYear(S.flags.lifeNtrWeek)) out.push({kind:"laugh", label:"彼女の浮気が発覚した師範", blurb:"目撃談はCLASHを駆け巡り、決着は話し合いとリングに持ち越された。恋の試合に判定はなかった"});
   if (inYear(S.flags.lifeFutamataWeek)) out.push({kind:"laugh", label:"二股が鉢合わせた師範", blurb:"デートの現場で二人の彼女が鉢合わせ。逃げ場のないリングサイドで、今年いちばん静かな修羅場が起きた"});
+  // 第158節: 彼女との喧嘩から通報・逮捕に至った年の実績候補（当事者を笑いの対象にしない。
+  // kind は "laugh" ではなく "aruaru" に置き、主題は事件そのものではなく界隈の自戒のほうに置く）
+  if (inYear(S.flags.kenkaArrestWeek)) out.push({kind:"aruaru", label:"彼女との喧嘩から通報・逮捕", blurb:"口論の末に物に当たり、通報、逮捕。界隈の反応は笑いではなく、引くような静けさと『手を上げた時点で終わり』という自戒だった。リングの外で失ったものの重さが、年末まで残った"});
   // 第139節: 裏ルートの実績候補（地下の王者の到達を、その年の噂として拾う）
   if (inYear(S.flags.uraUgKingWeek)) out.push({kind:"aruaru", label:"地下格闘技の王者（噂）", blurb:"賭け試合の地下で連勝を重ね、「王者」と呼ばれた男の噂。公式の記録には残らないが、地下を知る者の間では年末まで語られた"});
   // 第140節: 短時間マッチ興行の実績候補（優勝した年に拾う）

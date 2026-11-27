@@ -25,7 +25,7 @@ const WEEKS_PER_YEAR = 48;
 // ---------- プレイヤーの声（第72節）: バージョン管理・CLASH投稿・いいね ----------
 // 受け皿は2層: (1)ゲーム内CLASH投稿といいね（👍反応）は端末内 localStorage に保存
 // (2)全体の集計（人気投票・コメント）は Googleフォーム。投稿パネルの「開発にも送る」から送る
-const GAME_VERSION = "2.16";
+const GAME_VERSION = "2.17";
 const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdlIsptOWafNjikDixHtq6LTfnVsxE-XQMdapOLRBf5poeuYQ/viewform";
 const LIKES_KEY = "kakutogi_likes_v1";
 const POSTS_KEY = "kakutogi_posts_v1";
@@ -1123,11 +1123,19 @@ if (!L.titles || typeof L.titles!== "object") L.titles = {};
 if (L.children == null) L.children = 0;
 if (S.partner &&!L.partners.includes(S.partner)) L.partners.push(S.partner);
 if (!S.partner && L.partners.length) S.partner = L.partners[0];
+// 第158節: 喧嘩ルートの状態（v2.16以前のセーブでは未定義のため初期化）
+for (const _pid in L.per){ const pp = L.per[_pid]; if (!pp || typeof pp!== "object") continue;
+if (pp.kenkaCount == null) pp.kenkaCount = 0;
+if (pp.kenkaLastWeek == null) pp.kenkaLastWeek = -99;
+if (pp.kenkaAway == null) pp.kenkaAway = false;
+if (pp.kenkaAwayWeek == null) pp.kenkaAwayWeek = 0;
+if (pp.kenkaAwaySkips == null) pp.kenkaAwaySkips = 0;
+}
 return L;
 }
 function lifePerInit(id){
 const L = lifeEnsure(); if (!L) return {};
-if (!L.per[id] || typeof L.per[id]!== "object") L.per[id] = {since: S.absWeek, lastTouch: S.absWeek, risk: 0, peak: 0, affPeak: S.affection[id] || 0, suspicionDone: false, affair: null, affairStage: "", ntrWeek: 0, childEventDone: false, noChildDone: false, kids: 0, kidsBornWeek: 0, kidsSecret: false, kidsSecretKnown: "", takuranPrompted: false, earnKind: "", earnUntil: 0, earnTotal: 0, earnWeeks: 0, earnExposed: false, earnStopped: false, lastAskWeek: -99};
+if (!L.per[id] || typeof L.per[id]!== "object") L.per[id] = {since: S.absWeek, lastTouch: S.absWeek, risk: 0, peak: 0, affPeak: S.affection[id] || 0, suspicionDone: false, affair: null, affairStage: "", ntrWeek: 0, childEventDone: false, noChildDone: false, kids: 0, kidsBornWeek: 0, kidsSecret: false, kidsSecretKnown: "", takuranPrompted: false, earnKind: "", earnUntil: 0, earnTotal: 0, earnWeeks: 0, earnExposed: false, earnStopped: false, lastAskWeek: -99, kenkaCount: 0, kenkaLastWeek: -99, kenkaAway: false, kenkaAwayWeek: 0, kenkaAwaySkips: 0};
 return L.per[id];
 }
 function lifeIsPartner(id){
@@ -2131,12 +2139,30 @@ for (const pid of L.partners.slice()){
 const p = L.per[pid]; if (!p) continue;
 if (p.kidsSecret &&!p.kidsSecretKnown &&!p.takuranPrompted && S.absWeek >= (p.kidsBornWeek || 0) + 96 && _rng() < 0.3){ startScene(lifeTakuranSteps(pid), null, null); return true;}
 }
+// 2.5 第158節: 喧嘩で出ていった彼女への迎えイベント（出ていった翌週以降。勾留中は出ない）
+if (!(typeof inJail === "function" && inJail())){
+for (const pid of L.partners.slice()){
+const p = L.per[pid]; if (!p ||!p.kenkaAway) continue;
+if (S.absWeek > (p.kenkaAwayWeek || 0)){ startScene(lifeKenkaRecoverSteps(pid), null, null); return true;}
+}
+}
 // 3. 二股の修羅場
 if (L.partners.length >= 2 && (L.futamataRisk || 0) >= LIFE_FUTAMATA_FIRE && _rng() < 0.35){ startScene(lifeFutamataSteps(), null, null); return true;}
 // 4. 浮気疑惑（火種が最も大きい交際相手）
 let suspPid = null, suspRisk = -1;
 for (const pid of L.partners){ const p = L.per[pid]; if (p &&!p.suspicionDone && (p.risk || 0) >= LIFE_RISK_SUSPICION && (p.risk || 0) > suspRisk){ suspPid = pid; suspRisk = p.risk;}}
 if (suspPid && _rng() < 0.25){ startScene(lifeSuspicionSteps(suspPid), null, null); return true;}
+// 4.5 第158節: 彼女との喧嘩（火種が高いほど発火率が上がる。低くてもごく稀に起きる。勾留中は出ない）
+if (!(typeof inJail === "function" && inJail())){
+for (const pid of L.partners.slice()){
+const p = L.per[pid]; if (!p || p.kenkaAway) continue;
+if (S.absWeek - (p.since || S.absWeek) < 3) continue; // 交際直後は出ない
+if (S.absWeek - (p.kenkaLastWeek == null? -99: p.kenkaLastWeek) < 3) continue; // クールダウン3週
+const r = p.risk || 0;
+const ch = r >= 16? 0.30: r >= 10? 0.20: r >= 6? 0.10: r >= 3? 0.05: 0.015;
+if (_rng() < ch){ startScene(lifeKenkaSteps(pid), null, null); return true;}
+}
+}
 // 5. 子供が出来た（好感が高く交際が深い相手、または結婚相手）
 for (const pid of L.partners.slice()){
 const p = L.per[pid]; if (!p || p.childEventDone) continue;
@@ -2176,7 +2202,7 @@ return " ／ 想い人：" + L.partners.map(id => (CAST_BY_ID[id]? CAST_BY_ID[id
 }
 return (S.partner && CAST_BY_ID[S.partner])? " ／ 想い人：" + CAST_BY_ID[S.partner].name: "";
 }
-// 検証用： 強制発火（kind: suspicion_real/suspicion_fake/child/nochild/takuran/futamata/ntr）
+// 検証用： 強制発火（kind: suspicion_real/suspicion_fake/child/nochild/takuran/futamata/ntr/kenka/kenka_recover/kenka_arrest）
 function lifeForceEvent(kind){
 const L = lifeEnsure(); if (!L ||!L.partners.length) return false;
 const pid = L.partners[0];
@@ -2197,7 +2223,156 @@ p.affair = {real: true, rival: rival? rival.id: null, married: false, claimDone:
 p.affairStage = "ignored";
 startScene(lifeNtrSteps(pid), null, null); return true;
 }
+if (kind === "kenka"){ p.kenkaAway = false; startScene(lifeKenkaSteps(pid), null, null); return true;}
+if (kind === "kenka_recover"){ p.kenkaAway = true; p.kenkaAwayWeek = S.absWeek - 1; p.kenkaAwaySkips = 0; startScene(lifeKenkaRecoverSteps(pid), null, null); return true;}
+if (kind === "kenka_arrest"){ startScene([{kenkaArrest: pid}], null, null); return true;}
 return false;
+}
+// ---------- 第158節: 彼女との喧嘩ルート（口喧嘩→家出→通報・逮捕） ----------
+// 本人の2026-11-27指示「彼女と喧嘩したらこうなるってルート作って」を受けて実装する。
+// 直前の v2.16（現役選手の逮捕報道の型化）を受け、彼女ライフイベント（第138節）の火種
+// （per.risk）が溜まった交際関係で口喧嘩が起き、選択を誤ると物に当たる→通報→逮捕に至る。
+// 逮捕は既存の逮捕基盤（第139節: S.ura.arrests の回数・URA_JAIL_WEEKS の勾留週数・
+// jailUntil・3回目で逮捕バッドエンド）に合流させ、破局は lifeBreakupApply に委譲する。
+// 原因は主人公側の火種と選択に置き、彼女が主人公を陥れる描き方はしない。
+// 表現は全年齢。暴力の態様の詳細描写はしない（「手を上げてしまった」という結果と
+// 周囲の反応で描く）。逮捕分岐は笑いにせず、CLASHの反応にも自戒・ドン引きを必ず混ぜる。
+// 実在名・実在事件への言及は一切なし。設計と数値根拠は企画書第158節に記録。
+function lifePerFxApply(spec){
+if (!spec ||!spec.pid) return;
+const p = lifePerInit(spec.pid);
+if (spec.risk) p.risk = Math.max(0, Math.min(LIFE_RISK_CAP, (p.risk || 0) + spec.risk));
+if (spec.aff) S.affection[spec.pid] = clamp((S.affection[spec.pid] || 0) + spec.aff, 0, 100);
+if (spec.set) for (const k in spec.set) p[k] = spec.set[k];
+p.peak = Math.max(p.peak || 0, p.risk || 0);
+}
+const KENKA_CAUSES = [
+function(c){ return [
+{sp:"narr", t:"夜、稽古から帰ると、" + c.name + "がスマホを握ったまま、こちらを見た。"},
+{sp: c.id, t:"……ねえ。私のメッセージ、3日も既読のままだったの、気づいてる？"},
+{sp:"me", t:"（試合前で、余裕がなかった。だが、それを言い訳にしていい場面かどうかは、分かっていた）"},
+];},
+function(c){ return [
+{sp:"narr", t: c.name + "が、スマホの画面をこちらへ向けた。CLASHに上がった稽古場の集合写真。隣に写る女性門下生のことが、目に留まったらしい。"},
+{sp: c.id, t:"この人とは、どういう関係なの。前にも聞いたけど、ちゃんと答えて"},
+{sp:"me", t:"（何もない。何もないのだが、『何もない』の一言で済む空気ではなかった）"},
+];},
+function(c){ return [
+{sp:"narr", t:"約束していた休みの日。また稽古の予定が入った。告げた瞬間、" + c.name + "の表情が静かに固まった。"},
+{sp: c.id, t:"……約束、また流れたね。私との時間は、いつも後回しなんだ"},
+{sp:"me", t:"（返す言葉を探す。だが、事実の前では、どんな言葉も薄かった）"},
+];},
+function(c){ return [
+{sp:"narr", t:"夕食の席で、" + c.name + "が箸を止めた。道場の収支の話から、将来の話になった。"},
+{sp: c.id, t:"この先のこと、ちゃんと考えてる？ 私だけが不安なの、おかしいよね"},
+{sp:"me", t:"（考えていないわけじゃない。だが、言葉にできる形には、まだなっていなかった）"},
+];},
+];
+function lifeKenkaSteps(pid){
+const p = lifePerInit(pid); const c = CAST_BY_ID[pid];
+const cause = KENKA_CAUSES[(p.kenkaCount || 0) % KENKA_CAUSES.length](c);
+p.kenkaCount = (p.kenkaCount || 0) + 1;
+p.kenkaLastWeek = S.absWeek;
+return cause.concat([
+{choice:[
+{label:"謝る。話を最後まで聞く", say:[
+{sp: pid, t:"……謝るくらいなら、最初から――"},
+{sp:"narr", t:"言葉は途中で途切れた。泣くのを堪える顔だった。怒りの奥にあったのは、怒りじゃなかった。"},
+{lifePerFx:{pid:pid, risk:-6, aff:6}},
+{fx:{sei:1}},
+{sp:"narr", t:"長い話し合いの末、湯気の冷めたお茶を二人で飲んだ。解決ではない。だが、壊れる音はしなかった。今夜は、それで十分だった。"},
+]},
+{label:"言い返してしまう", say:[
+{sp:"me", t:"俺だって、必死にやってるんだよ！"},
+{sp:"narr", t:"言った瞬間、自分でも分かった。火に油だった。声が大きくなり、言葉が言葉を呼び、気づけば二人とも、言わなくていいことまで言っていた。"},
+{sp: pid, t:"……もういい。今夜は、実家に帰る"},
+{lifePerFx:{pid:pid, risk:4, aff:-4, set:{kenkaAway:true, kenkaAwayWeek:S.absWeek, kenkaAwaySkips:0}}},
+{sp:"narr", t:"小さな鞄ひとつで、彼女は出ていった。残された部屋は、やけに広かった。"},
+]},
+{label:"感情が爆発する（物に当たる）", say:[
+{sp:"narr", t:"頭の中で、何かが切れた。テーブルの上の湯呑みが、床で砕けた。"},
+{sp: pid, t:"……っ！"},
+{kenkaArrest: pid},
+]},
+]},
+]);
+}
+function lifeKenkaRecoverSteps(pid){
+const c = CAST_BY_ID[pid];
+return [
+{sp:"narr", t: c.name + "が出ていって、数日が経った。返信は短く、そっけない。だが、ブロックはされていない。それだけが、細い糸だった。"},
+{choice:[
+{label:"実家まで迎えに行き、頭を下げて謝る", say:[
+{sp:"narr", t:"玄関先で、頭を下げた。言い訳はしなかった。あの夜の自分の声の大きさを、思い出すだけで十分だった。"},
+{sp: pid, t:"……顔、上げて。近所の人が見てる"},
+{lifePerFx:{pid:pid, risk:-6, aff:5, set:{kenkaAway:false, kenkaAwaySkips:0}}},
+{fx:{sei:1}},
+{sp:"narr", t:"帰り道、二人でコンビニの肉まんを半分こした。元通りではない。だが、並んで歩く距離は、少しだけ戻っていた。"},
+]},
+{label:"もう少し時間を置く", say:[
+{kenkaIgnore: pid},
+]},
+]},
+];
+}
+function lifeKenkaIgnoreLines(pid){
+const p = lifePerInit(pid); const c = CAST_BY_ID[pid];
+p.kenkaAwaySkips = (p.kenkaAwaySkips || 0) + 1;
+if (p.kenkaAwaySkips >= 2){
+p.kenkaAway = false;
+const lines = [
+{sp:"narr", t:"数日後、" + c.name + "から長文のメッセージが届いた。要約すれば、こうだった。『待つ側にも、限界がある』"},
+{sp:"narr", t:"謝りに行くのが、あと一歩遅かった。関係は、静かに終わった。"},
+];
+return lines.concat(lifeBreakupApply(pid, {reason:"kenka_left", alimony:false, silent:true}));
+}
+p.risk = Math.min(LIFE_RISK_CAP, (p.risk || 0) + 2);
+p.kenkaAwayWeek = S.absWeek;
+return [
+{sp:"narr", t:"『もう少し時間を置こう』。そう決めた。だが、置いた時間は、相手にとっては『放置』と同じ形をしていた。"},
+{sp:"narr", t:"返信は、まだ来ない。"},
+];
+}
+function lifeKenkaArrestLines(pid){
+const U = uraEnsure();
+const p = lifePerInit(pid); const c = CAST_BY_ID[pid];
+p.kenkaAway = false;
+U.arrests = (U.arrests || 0) + 1;
+const n = U.arrests;
+U.heat = 0;
+S.flags.arrestRecord = true;
+S.flags.arrestWeek = S.absWeek;
+S.flags.kenkaArrestWeek = S.absWeek;
+S.romanceEv = S.romanceEv || {};
+const done = S.romanceEv[pid] || {};
+done.kenkaArrestBlock = true; // 釈放後も、この相手との関係修復は不可
+S.romanceEv[pid] = done;
+const head = [
+{sp:"narr", t:"割れた湯呑みの音が、まだ耳に残っていた。彼女の手は震えていた。――通報したのが近所の人だったのか、彼女自身だったのか。そんなことは、もう問題じゃなかった。"},
+{sp: pid, t:"……もう、無理だよ。あんたのそばにいるのが怖いなんて、思いたくなかった"},
+{sp:"narr", t:"玄関に警察官が立ち、名前と住所を聞かれた。武術家として何千回と繰り返してきた『制御』が、自分の家の中では、一度も働かなかった。"},
+];
+const clash = [
+{sp:"narr", t:"逮捕の報は、すぐにCLASHを駆け巡った。切り抜きと面白半分の言葉が飛び交う中で、『笑えない』『手を上げた時点で終わりだ』『俺も人のことは言えない。だからこそ、そこで止める』――自戒と、引くような沈黙の声も、確かに混じっていた。"},
+];
+if (n >= 3){
+const lines = head.concat(clash, [
+{fx:{sei:-6, aku:4, attention:3}},
+{sp:"narr", t:"逮捕は、これで" + n + "回目だった。"},
+]);
+return lines.concat(lifeBreakupApply(pid, {reason:"kenka_arrest", silent:true}), [{uraBadEnd:"arrest"}]);
+}
+const weeks = URA_JAIL_WEEKS[n - 1] || 6;
+U.jailUntil = S.absWeek + weeks;
+const lines = head.concat([
+{sp:"narr", t:"逮捕。取り調べと勾留で、" + weeks + "週間が消えた。その間、道場の稽古は止まり、生徒への連絡は弁護士を通すしかなかった。"},
+], clash, [
+{fx:{sei:-6, aku:4, attention:3}},
+]);
+return lines.concat(lifeBreakupApply(pid, {reason:"kenka_arrest", silent:true}), [
+{sp:"narr", t:"釈放された日、迎えはなかった。謝れば済む段階は、とうに過ぎていた。二人の関係は、ここで終わった。――失ったのは、" + weeks + "週間だけではなかった。"},
+{sp:"me", t:"（強さの証明の場所を、間違えた。リングの外で振るった力は、ただの暴力でしかなかった）"},
+]);
 }
 // ---------- 本場留学ルート（第75節：借金で資金調達） ----------
 const ABROAD_LOAN_CAP = 1000000; // 借金残高がこの額以上あると新規の借入は断られる
@@ -2474,6 +2649,9 @@ function sceneAdvance(){
     if (st.uraPartnerLeave){ const pid = (S.life && S.life.partners[0]) || S.partner; if (pid) UI.queue = uraPartnerLeaveLines(pid).concat(UI.queue); continue; } // 第139節: 彼女が去る実処理（選択が選ばれた時点で実行）
     if (st.uraWarLoseCheck){ UI.queue = uraWarLoseLines().concat(UI.queue); continue; } // 第139節: 抗争に敗れた際の重傷判定（バッドエンド分岐）
     if (st.uraShoulderRearrest){ UI.queue = uraShoulderRearrestLines().concat(UI.queue); continue; } // 第141節: 肩パンの別件逮捕を、現在の逮捕回数に応じて解決する
+    if (st.lifePerFx){ lifePerFxApply(st.lifePerFx); continue; } // 第158節: 交際相手の火種・好感・喧嘩状態の増減
+    if (st.kenkaArrest){ UI.queue = lifeKenkaArrestLines(st.kenkaArrest).concat(UI.queue); continue; } // 第158節: 喧嘩のエスカレーション→通報・逮捕を既存の逮捕回数に応じて解決する
+    if (st.kenkaIgnore){ UI.queue = lifeKenkaIgnoreLines(st.kenkaIgnore).concat(UI.queue); continue; } // 第158節: 出ていった彼女を放置した結果（繰り返すと別れ）
     if (st.shortEnter){ const SH = S.short; const yi = S.age - 19; SH.entries = (SH.entries || 0) + 1; SH.years[yi] = ((SH.years && SH.years[yi]) || 0) + 1; continue; } // 第140節: 短時間マッチ出場の記録
     if (st.shortWin){ S.short.wins = (S.short.wins || 0) + 1; continue; } // 第140節: 短時間マッチの勝利数
     if (st.shortChamp){ S.short.wins = (S.short.wins || 0) + 1; S.short.titles = (S.short.titles || 0) + 1; S.flags.shortKing = true; S.flags.shortChampWeek = S.absWeek; continue; } // 第140節: 短時間マッチ優勝の記録とBOTY連携フラグ
@@ -3438,7 +3616,7 @@ function doRomance(id){
   const done = S.romanceEv[id] || {};
   const head = [{img: id}];
   // 告白（好感度80・未交際。失敗時は時間を置いて再挑戦できる）
-  if (af >= 80 && !lifeIsPartner(id) && !done.confessed && (done.confessWaitUntil || 0) <= S.absWeek){ // 第138節: 交際相手がいても別の相手に告白できる（二股）
+  if (af >= 80 && !lifeIsPartner(id) && !done.confessed && !done.kenkaArrestBlock && (done.confessWaitUntil || 0) <= S.absWeek){ // 第138節: 交際相手がいても別の相手に告白できる（二股）。第158節: 喧嘩で逮捕された相手とは修復不可
     const ok = prefMatch(c);
     if (ok) done.confessed = true; else done.confessWaitUntil = S.absWeek + 6;
     S.romanceEv[id] = done;
@@ -4718,6 +4896,7 @@ function uraRecordText(){
   else if (S.ura.active) t += " ／ 裏格：" + uraRankName();
   if (S.flags.arrestRecord) t += " ／ 逮捕歴";
   if (S.ura.shoulderRearrestDone) t += " ／ 再逮捕（肩パン）";
+  if (S.flags.kenkaArrestWeek) t += " ／ 彼女との喧嘩で逮捕"; // 第158節
   if ((S.ura.ugBest || 0) > 0) t += " ／ 地下" + S.ura.ugBest + "連勝";
   return t;
 }
