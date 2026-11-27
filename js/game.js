@@ -25,7 +25,7 @@ const WEEKS_PER_YEAR = 48;
 // ---------- プレイヤーの声（第72節）: バージョン管理・CLASH投稿・いいね ----------
 // 受け皿は2層: (1)ゲーム内CLASH投稿といいね（👍反応）は端末内 localStorage に保存
 // (2)全体の集計（人気投票・コメント）は Googleフォーム。投稿パネルの「開発にも送る」から送る
-const GAME_VERSION = "2.17";
+const GAME_VERSION = "2.18";
 const FEEDBACK_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdlIsptOWafNjikDixHtq6LTfnVsxE-XQMdapOLRBf5poeuYQ/viewform";
 const LIKES_KEY = "kakutogi_likes_v1";
 const POSTS_KEY = "kakutogi_posts_v1";
@@ -488,6 +488,9 @@ function hasSave(){ try { return!!localStorage.getItem(SAVE_KEY);} catch(e){ ret
 
 // ---------- シーン再生エンジン ----------
 const UI = { screen:"title", queue:[], portrait:null, episode:null, battle:null, debate:null, afterWeek:null, likeId:null };
+// 第159節: イベント挑戦の登場収集（シーン単位の一時状態。セーブ対象外。startScene で初期化し、
+// sceneAdvance で登場キャストと戦闘組み込みマーカーを集め、finishScene で提示可否を判定する）
+let EVCHAL_RT = null;
 function startScene(steps, onDone, likeId){
   // 第82節: エピソード開始時点の状態を巻き戻しポイントとして保持する（真のデッドエンド用）
   if (likeId && S){ try { window.__rewindPoint = {s: JSON.stringify(S), steps: steps, onDone: onDone || null, likeId: likeId}; } catch(e){} }
@@ -496,6 +499,7 @@ function startScene(steps, onDone, likeId){
   UI.likeId = likeId || null;
   UI.queue = steps.slice();
   UI.onSceneDone = onDone || null;
+  EVCHAL_RT = {cast: [], seen: {}, blocked: false, likeId: likeId || null}; // 第159節: イベント挑戦の登場収集を開始
   sceneAdvance();
 }
 function startSceneById(id){
@@ -2629,6 +2633,7 @@ function nightAttackSteps(){
 function sceneAdvance(){
   while (UI.queue.length){
     const st = UI.queue.shift();
+    evChalTrack(st); // 第159節: 登場キャストと戦闘組み込みマーカーを収集
     if (st.venueIntro){
       const stl = mainStyle();
       const lines = (stl && VENUE_SPECIAL[stl.name]) || VENUE_TEXT[stl ? stl.venue : "dojo"] || [];
@@ -2691,6 +2696,7 @@ function sceneAdvance(){
     if (st.legalPay){ UI.queue = settleBillLines(st.legalPay.title || st.legalPay.label, [{label: st.legalPay.label, amount: st.legalPay.amount}]).concat(UI.queue); continue; }
     if (st.markFlag){ S.flags[st.markFlag] = true; S.flags[st.markFlag + "Week"] = S.absWeek; continue; }
     if (st.chalResult){ applyChallengeResult(st.chalResult); continue; }
+    if (st.evChalFight){ if (startChallenge(st.evChalFight, UI.onSceneDone)) return; continue; } // 第159節: イベントの場での挑戦（戦闘後の続きは、提示シーンが引き継いだ元の onDone を使う）
     if (st.clashSueIntro){ UI.queue = clashSueIntroLines().concat(UI.queue); continue; }
     if (st.injuryIntro){ UI.queue = injuryIntroLines().concat(UI.queue); continue; }
     if (st.injurySettlePay){ UI.queue = injurySettleLines().concat(UI.queue); continue; }
@@ -2737,7 +2743,9 @@ function sceneAdvance(){
 function finishScene(){
   UI.pendingMark = null; // 第116節: 目印はこのシーンの結果表示までで消費する（次シーンへ持ち越さない）
   saveGame(false);
-  if (UI.onSceneDone){ const f = UI.onSceneDone; UI.onSceneDone = null; f(); return; }
+  const cont = UI.onSceneDone; UI.onSceneDone = null;
+  if (evChalTryOffer(cont)) return; // 第159節: イベント挑戦の提示（成立した場合は、続きを提示シーンの後に回す）
+  if (cont){ cont(); return; }
   goWeek();
 }
 function speakerName(sp){
@@ -4360,7 +4368,7 @@ function chalStyleLabel(c, st){
   if (CHAL_CAST_STYLE[c.id]) return st.name;
   return c.style;
 }
-function startChallenge(id){
+function startChallenge(id, onDone){
   const c = CAST_BY_ID[id]; if (!c) return false;
   const st = challengeStyleFor(c); if (!st) return false;
   const styleTx = chalStyleLabel(c, st);
@@ -4397,7 +4405,74 @@ function startChallenge(id){
     {img: id},
     {sp:"narr", t: c.name + "に勝負を挑んだ。相手は" + styleTx + "の使い手" + (c.age != null ? "、" + c.age + "歳" : "") + "。逃げずに受けて立つ構えに、会場の空気が変わった。"},
     {battle: "chal_" + id, win: winSteps, lose: loseSteps},
-  ], () => endWeek());
+  ], onDone || (() => endWeek()));
+  return true;
+}
+
+// ---------- 第159節: イベントの場で「勝負を挑む」（イベント挑戦） ----------
+// 本人の2026-11-27の指示「出て来るキャラのイベントで挑戦出来るようにして」を受けて実装。
+// カメオ／あるある／CLASH論争（DEBATE_EVENTS）などのイベントシーンに登場したキャストへ、
+// イベント終了時にその場で挑戦できる。戦闘生成・報酬・記録・クールダウンは週行動の挑戦
+// （第114節 startChallenge／S.flags.chal）を完全共有し、二重実装はしない。イベント経由の
+// 挑戦は週の行動回数を消費しない（戦闘後の続きはイベントシーンの元の onDone を引き継ぐ）。
+// 【登場の検出】シーン再生中（sceneAdvance）に実際に処理されたステップだけを数える：
+//   {fx:{meet:[...]}}／{img:"<castId>"}（キャスト画像）／発言者 {sp:"<castId>"}／
+//   {ep:"<castId>"}（そのキャストのエピソードイラスト）／{debate:id} の投稿者名が
+//   キャスト名と一致する者。選ばれなかった選択肢の分岐先など、再生されなかった登場は数えない。
+// 【提示】イベント終了時（finishScene）に、挑戦可能な相手を登場順に最大3人まで選択肢に
+//   並べる（＋「挑まない」）。選ぶと {evChalFight} ステップ経由で startChallenge を起動する。
+//   選択フラッグ（第116節）の目印は renderChoice の既存処理でそのまま付く。
+// 【対象外】likeId を持たないシーン（口説き／彼女ライフ／裏ルート／瞑想などのシステム
+//   シーンは全てこちら）／戦闘が組み込まれたシーン（{battle}・道場対抗戦・天下一の
+//   マーカーを含むもの。審査戦・大会・章の本戦がここに当たる）／likeId が除外表に
+//   あるシーン（天下一武道会・BOTY発表・コラボ・強制執行などの手続き系）／
+//   候補からの除外キャスト：源田巌（師匠。登場場面の多くが指導の文脈のため。週行動の
+//   挑戦では従来どおり対象）と早乙女楓（弟子・連動型で稽古試合の文脈のため。同上）。
+//   潜伏中・勾留中・瞑想の静養中は週行動の挑戦と同じく提示しない。引退後も提示しない。
+//   クールダウン中（4週）の相手は選択肢に出さない（通常の挑戦リストで残り週数が見える）。
+const EVCHAL_EXCLUDE_LIKEID = new Set(["tenkaichi", "boty", "collab_generic", "comp_demand", "comp_execution", "night_flight_found", "abroad_offer", "debt_default"]);
+const EVCHAL_EXCLUDE_CAST = new Set(["genda", "saotome"]);
+let EVCHAL_NAME2ID = null;
+function evChalTrack(st){
+  const rt = EVCHAL_RT; if (!rt || !st) return;
+  const add = id => { if (id && CAST_BY_ID[id] && !rt.seen[id]){ rt.seen[id] = true; rt.cast.push(id); } };
+  if (st.fx && st.fx.meet) for (const id of st.fx.meet) add(id);
+  if (typeof st.img === "string") add(st.img);
+  if (st.sp) add(st.sp);
+  if (typeof st.ep === "string") add(st.ep);
+  if (st.debate && typeof DEBATES !== "undefined" && DEBATES[st.debate]){
+    if (!EVCHAL_NAME2ID){ EVCHAL_NAME2ID = {}; for (const c of CAST_DATA) EVCHAL_NAME2ID[c.name] = c.id; }
+    for (const p of (DEBATES[st.debate].posts || [])) add(EVCHAL_NAME2ID[p.name]);
+  }
+  if (st.battle || st.warWin || st.warLose || st.warWinK || st.warLoseK || st.warWinM || st.warLoseM || st.tenkaEnter) rt.blocked = true;
+}
+function evChalCandidates(){
+  const rt = EVCHAL_RT;
+  if (!rt || rt.blocked || !rt.likeId) return [];
+  if (EVCHAL_EXCLUDE_LIKEID.has(rt.likeId) || rt.likeId.indexOf("sp_collab_") === 0) return [];
+  if (!S || (S.flags && S.flags.retiredEnding)) return [];
+  if ((typeof inHiding === "function" && inHiding()) || (typeof inJail === "function" && inJail()) || (typeof meditResting === "function" && meditResting())) return [];
+  const out = [];
+  for (const id of rt.cast){
+    if (out.length >= 3) break;
+    if (id === "hayato" || EVCHAL_EXCLUDE_CAST.has(id)) continue;
+    const c = CAST_BY_ID[id]; if (!c) continue;
+    if (c.debut > S.chapter) continue; // 挑戦システムと同じ「登場済み（debut章に到達）」の線引き
+    const st = challengeStyleFor(c); if (!st) continue;
+    if (chalCooldownLeft(id) > 0) continue; // クールダウン中の相手は出さない
+    out.push({c, st});
+  }
+  return out;
+}
+function evChalTryOffer(cont){
+  const cands = evChalCandidates();
+  if (!cands.length) return false;
+  const choices = cands.map(x => ({label: x.c.name + "に勝負を挑む（格：" + challengeTier(x.c, x.st) + "）", say: [{evChalFight: x.c.id}]}));
+  choices.push({label: "挑まない", say: []});
+  startScene([
+    {sp:"narr", t:"一連の出来事が一段落したところで、空気が変わる。今の流れなら、この場にいる相手に勝負を挑める。"},
+    {choice: choices},
+  ], cont || (() => goWeek()));
   return true;
 }
 
@@ -5812,6 +5887,9 @@ window.__gameTest = {
   challengeExcluded: () => CAST_DATA.filter(c => c.debut <= S.chapter && !challengeStyleFor(c)).map(c => ({id: c.id, name: c.name, style: c.style})),
   startChallenge: id => startChallenge(id),
   chalRecord: () => (S && S.flags && S.flags.chal) || {},
+  // 第159節: イベント挑戦の検証フック（登場収集の途中経過と、現時点の候補）
+  evChalState: () => EVCHAL_RT ? {cast: EVCHAL_RT.cast.slice(), blocked: EVCHAL_RT.blocked, likeId: EVCHAL_RT.likeId} : null,
+  evChalCands: () => evChalCandidates().map(x => x.c.id),
   // 第137節: 天下一武道会の検証フック
   tenkaDue: () => tryTenkaichi(),
   tenkaField: () => (typeof TENKA_RT !== "undefined" && TENKA_RT) ? TENKA_RT.field.map(f => ({name: f.name, style: f.styleName, hp: f.hp, power: f.power, img: f.img})) : null,
@@ -6013,7 +6091,11 @@ window.__gameTest = {
         const route = main.querySelector("[data-route='self']"); if (route){ route.click(); return; }
         const back = main.querySelector("[data-back]"); if (back){ back.click(); return; }
         let act = "train_main";
-        if (S.fatigue > 78) act = "care";
+        // 第159節の検証で判明したハーネス側の弱点対策（ゲーム本体の仕様は変更しない）:
+        // 勾留・潜伏・静養中は seminar／train_main 等が仕様どおり弾かれて週が進まず、
+        // 決定論クリック（例: absWeek%7==0 で必ず seminar）が無限ループした。
+        // これらの状態では常に実行できる care を選んで週を進める。
+        if (S.fatigue > 78 || (typeof inJail === "function" && inJail()) || (typeof inHiding === "function" && inHiding()) || (typeof meditResting === "function" && meditResting())) act = "care";
         else if (S.money < 15000 && S.absWeek % 3 !== 0) act = "baito";
         else if (S.absWeek % 11 === 0) act = "romance";
         else if (S.absWeek % 7 === 0) act = "seminar";
